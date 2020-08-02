@@ -1,0 +1,16 @@
+#--------------------------------------------
+source /etc/network/interfaces.d/*
+
+# The loopback network interface
+auto lo
+iface lo inet loopback
+
+allow-hotplug {{ iface_red }}
+iface {{ iface_red }} inet dhcp
+
+allow-hotplug {{ iface_green }}
+iface enp0s8 inet static
+      address 172.24.0.1
+      netmask 255.255.255.0
+      broadcast 172.24.0.255
+#--------------------------------------------

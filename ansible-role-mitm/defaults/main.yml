@@ -1,0 +1,3 @@
+iface_red: enp0s3
+iface_green: enp0s8
+port: 8080

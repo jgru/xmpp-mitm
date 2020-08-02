@@ -1,0 +1,23 @@
+#--------------------------------------------
+# Listen for DNS requests on the internal network
+interface={{ iface_green }}
+listen-address=172.24.0.1
+# Act as a DHCP server, assign IP addresses to clients
+dhcp-range=172.24.0.10,172.24.0.20,96h
+# Broadcast gateway and dns server information
+dhcp-option=option:router,172.24.0.1
+dhcp-option=option:dns-server,172.24.0.1
+#--------------------------------------------
+# Log dns queries
+log-queries
+log-facility=/var/log/dnsmasq.log
+
+# Disable caching
+max-cache-ttl=0 
+auth-ttl=0
+cache-size=0
+no-negcache
+no-hosts
+
+server=8.8.8.8
+server=8.8.4.4

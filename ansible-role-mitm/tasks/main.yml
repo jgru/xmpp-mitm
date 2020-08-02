@@ -1,0 +1,124 @@
+---
+# This role prepares a plain debian based host to function as
+# a MiTM gateway. dnsmasq and iptables will be installed and
+# configured. Furtheron the xmpp_mitm.py script will be
+# transferred and all dependencies will be resolved.
+
+- name: Install packages needed for MiTM
+  apt:
+    pkg:
+      - dnsmasq
+      - iptables-persistent
+      - openssl
+      - libssl-dev
+    state: present
+  become: yes
+
+- name: Stop dnsmasq service, if running
+  systemd:
+    name: dnsmasq
+    state: stopped
+  become: yes
+
+- name: Put iface_green down
+  command: ifdown "{{ iface_green }}"
+  become: yes
+
+- name: Copy config for network interface
+  template:
+    src: interfaces.j2
+    dest: /etc/network/interfaces
+    owner: "root"
+    group: "root"
+    mode: '0644'
+  become: yes
+
+- name: Enable packet forwarding
+  lineinfile:
+    path: /etc/sysctl.conf
+    regexp: '^#net.ipv4.ip_forward=1 '
+    line: 'net.ipv4.ip_forward=1'
+  become: yes
+
+- name: Reload sysctl
+  command: sysctl -p
+  become: yes
+
+- name: Prevent systemd-resolved from binding to port 53 (conflicting with dnsmasq)
+  lineinfile:
+    path: /etc/systemd/resolved.conf
+    regexp: '^#DNSStubListener=yes$'
+    line: 'DNSStubListener=no'
+  become: yes
+
+- name: Restart systemd-resolved (unbind from port 53)
+  systemd:
+    name: systemd-resolved
+    state: restarted
+    enabled: yes
+    daemon_reload: yes
+  become: yes
+
+- name: Restart networking
+  systemd:
+    name: networking
+    state: restarted
+    daemon_reload: yes
+  become: yes
+
+- name: Put iface_green up
+  command: ifup "{{ iface_green }}"
+  become: yes
+
+- name: Copy dnsmasq conf
+  template:
+    src: dnsmasq.conf.j2
+    dest: /etc/dnsmasq.conf
+    owner: "root"
+    group: "root"
+    mode: '0644'
+  become: yes
+
+- name: Restart dnsmasq
+  systemd:
+    name: dnsmasq
+    state: started
+    enabled: yes
+    daemon_reload: yes
+  become: yes
+
+- name: Copy iptables rules
+  template:
+    src: rules.j2
+    dest: /usr/local/etc/rules
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: '0744'
+  become: yes
+
+- name: Restore iptables rules
+  command: iptables-restore  /usr/local/etc/rules
+  become: yes
+
+- name: Install python packages required by xmpp_mitm.py
+  pip:
+    name:
+    - scapy
+    - sslkeylog
+    executable: pip3
+
+- name: Copy xmpp_mitm.py
+  copy:
+    src: xmpp_mitm.py
+    dest: /usr/local/bin/
+    owner: "{{ ansible_user }}"
+    group: "{{ ansible_user }}"
+    mode: '0774'
+  become: yes
+
+- name: Copy cert and priv key
+  copy: src={{ item.src }} dest={{ item.dest }}
+  with_items:
+    - { src: 'ca.crt', dest: '/usr/local/etc', mode: '0644', owner: '{{ ansible_user }}', group: '{{ ansible_user }}' }
+    - { src: 'ca.key', dest: '/usr/local/etc', mode: '0644', owner: '{{ ansible_user }}', group: '{{ ansible_user }}' }
+  become: yes

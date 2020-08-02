@@ -1,0 +1,125 @@
+* xmpp-mitm
+
+** Basic functionality
+This script decrypts TLS encrypted XMPP traffic by acting as an active MiTM and observing for STARTTLS requests. Furtheron it sniffs on the specified interface and dumps SSL keys of its handshakes. It listens on the specified port, where the XMPP traffic should be redirected to (.e.g with iptables). When the client wants to connect, the proxy acts as the legitimate server, opens another socket to the actual target of the client and forwards the traffic in both directions. If STARTTLS messages and according TLS-record handshake signature '0x16 0x03' are observed, then TLS handshakes will be performed on both sides and the pre-master secrets will be logged for later inspection and decryption of the stored packets (e.g. with wireshark).
+
+
+** Usage
+#+begin_src bash
+# python 3 xmpp _ mitm . py -h
+usage: xmpp_mitm.py [-h] [--iface IFACE] [--write_file WRITE_FILE]
+		    [--sslkeylog SSLKEYLOG] [--port PORT] [--cert CERT]
+		    [--key KEY]
+
+This script decrypts TLS encrypted XMPP traffic by acting as an active MiTM
+and observing for STARTTLS requests. Furtheron it sniffs on the specified
+interface and dumps SSL keys of its handshakes. It listens on the specified
+port, where the XMPP traffic should be redirected to (.e.g with iptables).
+When the client wants to connect, the proxy acts as the legitimate server,
+opens another socket to the actual target of the client and forwards the
+traffic in both directions. If STARTTLS messages and according TLS-record
+handshake signature '0x16 0x03' are observed, then TLS handshakes will be
+performed on both sides and the pre-master secrets will be logged for later
+inspection and decryption of the stored packets (e.g. with wireshark).
+
+optional arguments:
+  -h, --help            show this help message and exit
+  --iface IFACE, -i IFACE
+			NIC to sniff from
+  --write_file WRITE_FILE, -w WRITE_FILE
+			Path to .pcap-file to store sniffed packets
+  --sslkeylog SSLKEYLOG, -s SSLKEYLOG
+			Path to .txt-file to store pre-master secrets and
+			session keys
+  --port PORT, -p PORT  Port to listen on. Iptables has to redirect here
+  --cert CERT, -c CERT  Path to cert file to use as server
+  --key KEY, -k KEY     Path to key file corresponding to a/m cert
+#+end_src
+
+** ansible-role-mitm
+*** Overview of the functionality
+ For painless deployment of a MITM-router, an Ansible role is provided, which creates a transparent gateway, which provides DHCP on the green interface. iptables forwards incoming traffic to a specified port, where the ~xmmp_mitm.py~ inspects the packets and does its magic.
+
+ #+BEGIN_SRC ditaa :file network_setup.png :cmdline -E -S -s 2.0
+ +------------------------------------------+
+ |        Virtuelles internes Netzwerk      |
+ |                                          |
+ | +----------------+                +------+--------+          +------+--------+                               +---------------+
+ | |                |                |               |          |               |                               |               |
+ | | Object under   |      XMPP      |  transparent  |          |{s}   NAT      |           /--------\          | Jabber-Server |
+ | | investigation  +<-------------->+     proxy     +<-------->+    Gateway    +<----------+  WWW   +--------->+               |
+ | |                |    Traffic     |               |          |               |           \=-------/          |               |
+ | +----------------+                +------+----+-+-+          +------+--------+                               +---------------+
+ |     XMPP Client                   xmpp_  |    | |                                                               XMPP Service
+ |                                  mitm.py |    | |
+ +=-----------------------------------------+    | +--------+
+						 |          |
+						 v          v
+					     +---+---+  +---+---+
+					     |{s}    |  |{d}    |
+					     | Pcap  |  | TLS   |
+					     | file  |  | Keys  |
+					     |       |  |       |
+					     +---+---+  +-------+
+
+
+ #+END_SRC
+
+ #+RESULTS:
+ [[file:network_setup.png]]
+
+*** Inner workings
+ The following chart illustrates the working components, which are set up by the provided ansible role.
+ #+BEGIN_SRC ditaa :file mitm_setup.png  :cmdline -E -S -s 2.0
+ +-----------------------------------------------------+
+ |                                                     |
+ |                                                     |
+ |                            +------------------------+---------------------------+
+ |                            |                                +------+ +------+   |
+ |                            |                                |{s}   | |{d}   |   |
+ |                            |                                :      | : SSL  |   |
+ |                            |               +-----------+    | Pcap | | Key  |   |
+ |                            |               |           |    |      | | Log  |   |
+ |                            |       +------>+  dnsmasq  |    +---+--+ +--+---+   |
+ |                            |       |       |           |        ^       ^       |
+ |                            |       |       |           |        |       |       |
+ |                            | +--+  |       +-----------+        | +-----+ +--+  |
+ |                            | |  |  |                            | |       |  |  |
+ |                            | |  |  |   +------------------------+-+-+     |  |  |
+ |                            | |  |  |   |  +------------+        | | |     |  |  |
+ |                            | |  |  |   |  |            +--------+ | |     |  |  |
+ |                            | |  |  |   |  | Sniffer    +<---------+-+---->+  |  |
+ |                            | |  |  |   |  |            |          | |     |  |  |
+ |   +----------------+  DHCP | |  |  |   |  +------------+          | |     |  |  |
+ |   |                +<------+-+  +--+   |                          | |     |  |  |
+ |   |                |       | |  |      |                          | |     |  |  |
+ |   |                |       | |  |      |  +----------+-+          | |     |  |  |
+ |   |                |  XMPP | |  |      |  |            +----------+ |     |  |  |
+ |   |    host in     +<------+-+  +------+->+ XMPP MitM  +<-----------+-----+  +--+--------->
+ |   |    question    |       | |  |      |  |            |            |     |  |  |
+ |   |                |       | |  |      |  +-----+------+            |     |  |  |
+ |   |                | Other | |  |      |        ^                   |     |  |  |
+ |   |                +<------+-+  +--+   |        |                   |   +-+  +--+--------->
+ |   |                |       | |  |  |   |  +-----+------+            |   | |  |  |
+ |   +----------------+       | |  |  |   |  |            |            |   | |  |  |
+ |                            | |  |  |   |  + Initiator  +  xmpp_     |   | |  |  |
+ |                            | |  |  |   |  |            |  mitm.py   |   | |  |  |
+ |                            | +--+  |   |  +-----+------+            |   | +--+  |
+ |                            | eth0  |   +--------^-------------------+   | eth1  |
+ |                            |       |            |                       |       |
+ |                            |       |            |redirect               |       |
+ |                            |       |            |                       |       |
+ |                            |       |   +--------+-------------------+   |       |
+ |                            |       +-->+     iptables forward       +<--+       |
+ |                            |           +----------------------------+           |
+ |                            |                                                    |
+ |                            |               Transparent Proxy                    |
+ |                            +--------------------------+-------------------------+
+ |                                                       |
+ |                                                       |
+ |                        vboxnet                        |
+ +----------------------------------------------------=--+
+ #+END_SRC
+
+ #+RESULTS:
+ [[file:mitm_setup.png]]
