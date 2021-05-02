@@ -5,7 +5,7 @@ This script decrypts TLS encrypted XMPP traffic by acting as an active MITM and 
 
 
 ** Usage
-#+begin_src bash
+#+begin_src
 # python 3 xmpp _ mitm . py -h
 usage: xmpp_mitm.py [-h] [--iface IFACE] [--write_file WRITE_FILE]
 		    [--sslkeylog SSLKEYLOG] [--port PORT] [--cert CERT]
